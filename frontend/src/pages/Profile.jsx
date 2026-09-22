@@ -33,6 +33,7 @@ export default function Profile() {
   const [f, setF] = useState(() => ({ name: user?.name, age: user?.age, bio: user?.bio, city: user?.city, country: user?.country,
     lat: user?.lat ?? null, lng: user?.lng ?? null, hide_distance: user?.hide_distance ?? false,
     video_calls_enabled: user?.video_calls_enabled ?? true,
+    phone: user?.phone ?? "", sms_notifications_enabled: user?.sms_notifications_enabled ?? false,
     genders: user?.genders || (user?.gender ? [user.gender] : []),
     ...Object.fromEntries(DETAIL_KEYS.map(k => [k, user?.[k] ?? null])) }));
   const [busy, setBusy] = useState(false);
@@ -197,6 +198,21 @@ export default function Profile() {
               checked={f.video_calls_enabled !== false}
               onCheckedChange={v => setF({ ...f, video_calls_enabled: v })}
             />
+          </div>
+          <div className="rounded-xl border border-white/10 bg-white/5 p-3" data-testid="profile-notifications-row">
+            <Label className="text-xs text-slate-400">{t("phone_optional", lang)}</Label>
+            <Input data-testid="profile-phone-input" type="tel" value={f.phone || ""} placeholder="+1 555 123 4567" onChange={e => setF({ ...f, phone: e.target.value })} className="bg-white/5 border-white/10 mt-1" />
+            <div className="flex items-center justify-between gap-3 mt-3">
+              <div className="min-w-0">
+                <div className="text-sm text-slate-200">Allow text notifications</div>
+                <p className="text-[11px] text-slate-400 mt-0.5">Receive matches, messages, gifts and date reminders by SMS.</p>
+              </div>
+              <Switch
+                data-testid="profile-sms-notifications-switch"
+                checked={!!f.sms_notifications_enabled}
+                onCheckedChange={v => setF({ ...f, sms_notifications_enabled: v })}
+              />
+            </div>
           </div>
         </div>
         <ProfileDetailsForm f={f} setF={setF} lang={lang} gender={user?.gender} />

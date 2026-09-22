@@ -51,7 +51,7 @@ export default function Auth() {
   const nav = useNavigate();
   const [sp] = useSearchParams();
   const [mode, setMode] = useState(sp.get("register") ? "register" : "login");
-  const [f, setF] = useState({ email: "", password: "", name: "", age: 25, gender: "female", genders: ["female"], interested_in: "male", orientation: "straight", orientations: ["straight"], city: "", country: "", bio: "", phone: "", referral_code: sp.get("ref") || "", language: lang, birth_day: "", birth_month: "", birth_year: "", lat: null, lng: null });
+  const [f, setF] = useState({ email: "", password: "", name: "", age: 25, gender: "female", genders: ["female"], interested_in: "male", orientation: "straight", orientations: ["straight"], city: "", country: "", bio: "", phone: "", sms_notifications_enabled: false, referral_code: sp.get("ref") || "", language: lang, birth_day: "", birth_month: "", birth_year: "", lat: null, lng: null });
   const [busy, setBusy] = useState(false);
   const [locating, setLocating] = useState(false);
   const [agreed, setAgreed] = useState(false);
@@ -236,6 +236,18 @@ export default function Auth() {
               <div><Label className="text-xs text-slate-400">{t("phone_optional", lang)}</Label>
                 <Input data-testid="auth-phone-input" type="tel" value={f.phone} onChange={e => setF({ ...f, phone: e.target.value })} placeholder="+1 555 123 4567" className="bg-white/5 border-white/10 mt-1" />
                 <p className="text-[11px] text-slate-500 mt-1">{t("phone_hint", lang)}</p></div>
+              <label className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3 cursor-pointer" data-testid="auth-sms-toggle-label">
+                <input
+                  data-testid="auth-sms-notifications-toggle"
+                  type="checkbox"
+                  checked={!!f.sms_notifications_enabled}
+                  onChange={e => setF({ ...f, sms_notifications_enabled: e.target.checked })}
+                  className="w-4 h-4 accent-rose-500 shrink-0"
+                />
+                <span className="text-xs text-slate-300 leading-relaxed">
+                  <span className="font-semibold text-slate-100">Allow text notifications</span> — get date reminders, matches and messages by SMS.
+                </span>
+              </label>
               <div><Label className="text-xs text-slate-400">{t("referral_optional", lang)}</Label>
                 <Input data-testid="auth-referral-input" value={f.referral_code} onChange={e => setF({ ...f, referral_code: e.target.value.toUpperCase() })} className="bg-white/5 border-white/10 mt-1 font-mono" /></div>
               <label className="flex items-start gap-2.5 pt-1 cursor-pointer" data-testid="auth-consent-label">

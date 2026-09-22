@@ -355,20 +355,22 @@ def _email_html(title: str, body: str) -> str:
             f'Sent by GiftsDates · Luxury Dating. We never ask for your password or card details by email.</div>'
             f'</td></tr></table></td></tr></table>')
 
-async def notify(user_id: str, ntype: str, title: str, body: str, data: dict | None = None, email: bool = False, link: str | None = None, cta: str = "View on GiftsDates", sms: bool = False, sms_body: str | None = None):
+async def notify(user_id: str, ntype: str, title: str, body: str, data: dict | None = None, email: bool = False, link: str | None = None, cta: str = "View on GiftsDates", sms: bool | None = None, sms_body: str | None = None):
+    """Multi-channel notification: always records an in-app (push) notification, and
+    fans out to Email and SMS. SMS defaults to ON whenever an email is sent, but only
+    reaches users who have a phone number AND opted in (sms_notifications_enabled)."""
     now = datetime.now(timezone.utc).isoformat()
     await db.notifications.insert_one({"id": str(uuid.uuid4()), "user_id": user_id, "type": ntype, "title": title,
                                        "body": body, "data": data or {}, "read": False, "created_at": now})
-    if email or sms:
-        u = await db.users.find_one({"id": user_id}, {"email": 1, "phone": 1})
-    else:
-        u = None
+    # SMS follows email by default so opted-in users get every event on both channels.
+    want_sms = email if sms is None else sms
+    u = await db.users.find_one({"id": user_id}, {"email": 1, "phone": 1, "sms_notifications_enabled": 1}) if (email or want_sms) else None
     if email and u and u.get("email"):
         html = _email_cta_html(title, body, link, cta) if link else _email_html(title, body)
         sent = await send_email(to=u["email"], subject=f"{title} · GiftsDates", html=html)
         await db.email_outbox.insert_one({"id": str(uuid.uuid4()), "to": u["email"], "subject": title, "body": body,
                                           "status": "sent" if sent else "failed", "created_at": now})
-    if sms and u and u.get("phone"):
+    if want_sms and u and u.get("phone") and u.get("sms_notifications_enabled"):
         text = (sms_body or f"{title} — {body}")
         if link:
             text = f"{text} {link}"
@@ -478,6 +480,7 @@ class RegisterReq(BaseModel):
     referral_code: Optional[str] = None
     spin_token: Optional[str] = None
     language: Optional[str] = "en"
+    sms_notifications_enabled: Optional[bool] = False
     birth_year: Optional[int] = None
     birth_month: Optional[int] = None
     birth_day: Optional[int] = None
@@ -529,6 +532,7 @@ class ProfileUpdate(BaseModel):
     availability: Optional[List[str]] = None  # ISO dates YYYY-MM-DD when user is open for dates
     availability_time: Optional[dict] = None  # {"from": "18:00", "to": "23:00"} default window
     availability_slots: Optional[dict] = None  # {"YYYY-MM-DD": {"from": "..", "to": ".."}} per-day overrides
+    sms_notifications_enabled: Optional[bool] = None
 
 class LikeReq(BaseModel):
     target_id: str
@@ -637,6 +641,11 @@ async def _startup():
     init_storage()
     await db.users.create_index("email", unique=True)
     await db.users.create_index("id", unique=True)
+    await db.users.create_index("phone")
+    await db.users.create_index("created_at")
+    await db.new_users_list.create_index("registered_at")
+    await db.new_users_list.create_index("email")
+    await db.new_users_list.create_index("user_id", unique=True)
     await db.likes.create_index([("from_id", 1), ("to_id", 1)], unique=True)
     await db.notifications.create_index([("user_id", 1), ("read", 1)])
     await db.spins.create_index("token", unique=True)
@@ -867,6 +876,7 @@ async def register(req: RegisterReq):
         "lat": req.lat, "lng": req.lng,
         "bio": req.bio or "", "interests": [], "photos": [], "language": req.language or "en",
         "phone": (req.phone or "").strip() or None,
+        "sms_notifications_enabled": bool(req.sms_notifications_enabled),
         "coins": 0,  # no welcome bonus (Spin & Win only)
         "escrow": 0.0, "withdrawable": 0.0,
         "premium_until": None, "verified": False,
@@ -878,16 +888,41 @@ async def register(req: RegisterReq):
     }
     await db.users.insert_one(doc)
     fresh = await db.users.find_one({"id": uid})
-    # Alert the admin inbox about the new registration.
+    # Chronological audit log of every new registration (indexed on created_at).
     try:
-        await notify_admin_email(
-            subject="New User · GiftsDates",
-            title="New User registered 🎉",
-            body=f"(new User) {doc['name']}, {doc['age']} · {doc.get('city') or '—'}, {doc.get('country') or '—'} · {doc['email']}",
-            link=f"{PUBLIC_APP_URL}/admin",
-            cta="Open Admin Panel",
-            note="new User",
+        await db.new_users_list.insert_one({
+            "id": str(uuid.uuid4()), "user_id": uid, "name": doc["name"], "email": doc["email"],
+            "country": doc.get("country"), "city": doc.get("city"), "language": doc.get("language"),
+            "phone": doc.get("phone"), "referral_code": (req.referral_code or "").upper().strip() or None,
+            "referred_by": doc.get("referred_by"), "sms_notifications_enabled": doc["sms_notifications_enabled"],
+            "registered_at": doc["created_at"],
+        })
+    except Exception as e:
+        logging.error(f"new_users_list log failed: {e}")
+    # Instant admin email on every new registration (subject exactly "New User").
+    try:
+        from html import escape as _esc
+        used_ref = (req.referral_code or "").upper().strip() or "—"
+        rows = [
+            ("User ID", uid), ("Name", doc["name"]), ("Email", doc["email"]),
+            ("Country", doc.get("country") or "—"), ("City", doc.get("city") or "—"),
+            ("Registered", doc["created_at"]), ("Referral Code", used_ref),
+        ]
+        body_html = (
+            '<table role="presentation" width="100%" style="background:#0f0d16;border-radius:12px;'
+            'border:1px solid rgba(255,255,255,0.08)">'
+            + "".join(
+                f'<tr><td style="padding:6px 12px;color:#8a8598;font-size:13px">{_esc(k)}</td>'
+                f'<td style="padding:6px 12px;color:#f4f1f7;font-size:13px;font-weight:600">{_esc(str(v))}</td></tr>'
+                for k, v in rows)
+            + "</table>"
         )
+        html = _email_html("New user registered", "A new member just joined GiftsDates:") + body_html
+        sent = await send_email(to=ADMIN_NOTIFY_EMAIL, subject="New User", html=html)
+        await db.email_outbox.insert_one({"id": str(uuid.uuid4()), "to": ADMIN_NOTIFY_EMAIL, "subject": "New User",
+                                          "body": f"New user {doc['name']} ({doc['email']}) from {doc.get('country') or '—'}",
+                                          "note": "new user", "status": "sent" if sent else "failed",
+                                          "created_at": datetime.now(timezone.utc).isoformat()})
     except Exception as e:
         logging.error(f"admin signup email failed: {e}")
     return {"token": make_token(uid), "user": {k: v for k, v in fresh.items() if k not in ("password", "_id")}, "spin_bonus": None}
@@ -967,6 +1002,19 @@ async def update_me(patch: ProfileUpdate, user=Depends(get_current_user)):
         await db.users.update_one({"id": user["id"]}, {"$set": upd})
     fresh = await db.users.find_one({"id": user["id"]}, {"_id": 0, "password": 0})
     return fresh
+
+@api.get("/admin/new-users")
+async def admin_new_users(country: Optional[str] = None, referral_code: Optional[str] = None,
+                          since: Optional[str] = None, limit: int = 200, admin=Depends(get_admin)):
+    """Chronological audit list of new registrations with optional filters."""
+    q: dict = {}
+    if country: q["country"] = country
+    if referral_code: q["referral_code"] = referral_code.upper().strip()
+    if since: q["registered_at"] = {"$gte": since}
+    total = await db.new_users_list.count_documents(q)
+    rows = await db.new_users_list.find(q, {"_id": 0}).sort("registered_at", -1).limit(min(max(limit, 1), 500)).to_list(500)
+    return {"total": total, "users": rows}
+
 
 # ---------- Uploads ----------
 @api.post("/upload")
