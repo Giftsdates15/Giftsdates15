@@ -1,9 +1,10 @@
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { api } from "../lib/api";
 import { useApp } from "../context/AppContext";
 import { Crown, Sparkles, Coins, Gift, PartyPopper } from "lucide-react";
+import confetti from "canvas-confetti";
 
 // 8 sectors — order & indices MUST match backend SPIN_PRIZES
 const PRIZES = [
@@ -21,6 +22,57 @@ const SEG = 45;
 const GRAD = `conic-gradient(from -22.5deg, ${COLORS.map((c, i) => `${c} ${i * SEG}deg ${(i + 1) * SEG}deg`).join(", ")})`;
 
 const TIER_NAME = { premium_lite: "Premium-Lite", premium: "Premium", vip: "VIP" };
+
+const PRIZE_CONFETTI = {
+  coins: ["#f59e0b", "#fbbf24", "#fde68a"],
+  premium_lite: ["#38bdf8", "#7dd3fc", "#e0f2fe"],
+  premium: ["#f59e0b", "#fcd34d", "#fff7ed"],
+  vip: ["#ef4444", "#f43f5e", "#fecaca", "#fbbf24"],
+};
+
+// Celebratory confetti burst — bigger & longer for higher tiers.
+function fireConfetti(type) {
+  const colors = PRIZE_CONFETTI[type] || ["#f59e0b", "#f43f5e", "#38bdf8"];
+  const big = type === "vip" || type === "premium";
+  const end = Date.now() + (big ? 1400 : 800);
+  // initial center burst
+  confetti({ particleCount: big ? 160 : 90, spread: big ? 100 : 75, startVelocity: 45, origin: { y: 0.6 }, colors, zIndex: 100000 });
+  // side cannons streaming for a moment
+  (function frame() {
+    confetti({ particleCount: 5, angle: 60, spread: 55, origin: { x: 0 }, colors, zIndex: 100000 });
+    confetti({ particleCount: 5, angle: 120, spread: 55, origin: { x: 1 }, colors, zIndex: 100000 });
+    if (Date.now() < end) requestAnimationFrame(frame);
+  })();
+}
+
+// Short synthesized "win" chime using the Web Audio API (no external asset).
+function playWinChime(ctx, type) {
+  if (!ctx) return;
+  try {
+    if (ctx.state === "suspended") ctx.resume();
+    const now = ctx.currentTime;
+    // ascending arpeggio; a brighter/longer flourish for top tiers
+    const big = type === "vip" || type === "premium";
+    const notes = big ? [523.25, 659.25, 783.99, 1046.5, 1318.5] : [523.25, 659.25, 783.99, 1046.5];
+    const master = ctx.createGain();
+    master.gain.value = 0.0001;
+    master.connect(ctx.destination);
+    master.gain.setValueAtTime(0.18, now);
+    notes.forEach((freq, i) => {
+      const t = now + i * 0.11;
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = "triangle";
+      osc.frequency.value = freq;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.22, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
+      osc.connect(g).connect(master);
+      osc.start(t);
+      osc.stop(t + 0.3);
+    });
+  } catch { /* ignore audio errors */ }
+}
 
 function SectorLabel({ p }) {
   return (
@@ -45,10 +97,20 @@ export const SpinWheel = ({ open, onClose, userName }) => {
   const [spinning, setSpinning] = useState(false);
   const [result, setResult] = useState(null);
   const [done, setDone] = useState(false); // becomes true once a spin has been consumed
+  const audioRef = useRef(null);
 
   const doSpin = async () => {
     if (spinning || result) return;
     setSpinning(true);
+    // Create/resume the AudioContext inside the click gesture so the delayed
+    // win chime is allowed to play by the browser.
+    try {
+      if (!audioRef.current) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (AC) audioRef.current = new AC();
+      }
+      if (audioRef.current?.state === "suspended") audioRef.current.resume();
+    } catch { /* audio not available */ }
     try {
       const { data } = await api.post("/spin/claim");
       const p = data.prize;
@@ -58,6 +120,10 @@ export const SpinWheel = ({ open, onClose, userName }) => {
         setResult(p);
         setDone(true);
         setSpinning(false);
+        if (p.type && p.type !== "none") {
+          fireConfetti(p.type);
+          playWinChime(audioRef.current, p.type);
+        }
         await refreshUser();
       }, 4300);
     } catch (e) {
@@ -79,15 +145,15 @@ export const SpinWheel = ({ open, onClose, userName }) => {
   };
 
   const welcome = () => {
-    const name = userName ? `${userName}, ` : "";
+    const first = (userName || "").trim().replace(/[,!.]+$/, "");
     if (!result) return "";
     if (result.type === "coins") {
-      return `Congratulations, ${name}you won 10 Coins! They've been added to your wallet.`;
+      return `Congratulations${first ? ", " + first : ""}! You won 10 Coins — they've been added to your wallet.`;
     }
     if (TIER_NAME[result.type]) {
-      return `Congratulations! You won a 7-day ${TIER_NAME[result.type]} account!`;
+      return `Congratulations${first ? ", " + first : ""}! You won a 7-day ${TIER_NAME[result.type]} account!`;
     }
-    return `Welcome to GiftsDates, ${name}! Explore profiles, send gifts and start connecting.`;
+    return `Welcome to GiftsDates${first ? ", " + first : ""}! Explore profiles, send gifts and start connecting.`;
   };
 
   const ResultIcon = result?.type === "coins" ? Coins
