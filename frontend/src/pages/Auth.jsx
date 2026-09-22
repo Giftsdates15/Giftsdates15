@@ -14,7 +14,6 @@ import SpinWheel from "../components/SpinWheel";
 import CountrySelect from "../components/CountrySelect";
 import CitySelect from "../components/CitySelect";
 import MultiSelect from "../components/MultiSelect";
-import ChipMultiSelect from "../components/ChipMultiSelect";
 import { Eye, EyeOff, MapPin, Loader2 } from "lucide-react";
 import { detectLocation } from "../lib/geolocate";
 import { normalizeCountry } from "../lib/countries";
@@ -199,13 +198,16 @@ export default function Auth() {
                 </div>
                 <div className="col-span-2">
                   <Label className="text-xs text-slate-400">{t("orientation", lang)} ({t("select_multiple", lang)})</Label>
-                  <ChipMultiSelect
-                    testid="auth-orientation-select"
-                    accent="rose"
-                    value={f.orientations || []}
-                    onChange={(os) => setF({ ...f, orientations: os, orientation: os[0] || "" })}
-                    options={ORIENTATIONS.map(o => ({ value: o, label: optLabel("orientation", o, lang) }))}
-                  />
+                  <div className="mt-1">
+                    <MultiSelect
+                      testid="auth-orientation-select"
+                      accent="rose"
+                      placeholder={t("orientation", lang)}
+                      value={f.orientations || []}
+                      onChange={(os) => setF({ ...f, orientations: os, orientation: os[0] || "" })}
+                      options={ORIENTATIONS.map(o => ({ value: o, label: optLabel("orientation", o, lang) }))}
+                    />
+                  </div>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">

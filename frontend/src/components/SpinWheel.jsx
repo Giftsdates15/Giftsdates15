@@ -98,6 +98,8 @@ export const SpinWheel = ({ open, onClose, userName }) => {
   const [result, setResult] = useState(null);
   const [done, setDone] = useState(false); // becomes true once a spin has been consumed
   const audioRef = useRef(null);
+  const [spinCfg, setSpinCfg] = useState({ dur: 4.2, ease: "cubic-bezier(0.16,1,0.3,1)" });
+  const [dramatic, setDramatic] = useState(false); // VIP suspense/glow while spinning
 
   const doSpin = async () => {
     if (spinning || result) return;
@@ -114,20 +116,34 @@ export const SpinWheel = ({ open, onClose, userName }) => {
     try {
       const { data } = await api.post("/spin/claim");
       const p = data.prize;
-      const target = 360 * 6 + (360 - (p.index || 0) * SEG);
+      // VIP gets a slower, more dramatic finish (more turns + longer, suspenseful ease).
+      const isVip = p.type === "vip";
+      const turns = isVip ? 11 : 6;
+      const dur = isVip ? 7.2 : 4.2;
+      const ease = isVip ? "cubic-bezier(0.08,0.72,0.12,1)" : "cubic-bezier(0.16,1,0.3,1)";
+      const target = 360 * turns + (360 - (p.index || 0) * SEG);
+      setSpinCfg({ dur, ease });
+      setDramatic(isVip);
       setRot(target);
       setTimeout(async () => {
         setResult(p);
         setDone(true);
         setSpinning(false);
+        setDramatic(false);
         if (p.type && p.type !== "none") {
           fireConfetti(p.type);
           playWinChime(audioRef.current, p.type);
+          // VIP gets a second golden shower for extra drama.
+          if (isVip) {
+            setTimeout(() => fireConfetti("vip"), 700);
+            setTimeout(() => fireConfetti("vip"), 1500);
+          }
         }
         await refreshUser();
-      }, 4300);
+      }, dur * 1000 + 120);
     } catch (e) {
       setSpinning(false);
+      setDramatic(false);
       setDone(true); // if backend says already used, don't allow retry
     }
   };
@@ -163,6 +179,7 @@ export const SpinWheel = ({ open, onClose, userName }) => {
     : PartyPopper;
 
   const isWin = result && result.type !== "none";
+  const bigWin = result && result.type === "vip";
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -177,15 +194,15 @@ export const SpinWheel = ({ open, onClose, userName }) => {
         <div className="relative mx-auto my-4" style={{ width: 300, height: 300 }} data-testid="spin-wheel">
           <div className="absolute left-1/2 -translate-x-1/2 -top-1 z-20"
             style={{ width: 0, height: 0, borderLeft: "14px solid transparent", borderRight: "14px solid transparent", borderTop: "22px solid #fbbf24" }} />
-          <div className="absolute inset-0 rounded-full border-4 border-amber-400/60 shadow-[0_0_40px_rgba(245,158,11,0.35)] pointer-events-none"
-            style={{ background: GRAD, transform: `rotate(${rot}deg)`, transition: "transform 4.2s cubic-bezier(0.16,1,0.3,1)" }}>
+          <div className={`absolute inset-0 rounded-full border-4 border-amber-400/60 shadow-[0_0_40px_rgba(245,158,11,0.35)] pointer-events-none ${dramatic ? "vip-glow" : ""}`}
+            style={{ background: GRAD, transform: `rotate(${rot}deg)`, transition: `transform ${spinCfg.dur}s ${spinCfg.ease}` }}>
             {PRIZES.map((p, i) => (
               <div key={i} className="absolute inset-0" style={{ transform: `rotate(${i * SEG}deg)` }}>
                 <SectorLabel p={p} />
               </div>
             ))}
           </div>
-          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-12 h-12 rounded-full bg-[#141019] border-4 border-amber-400/70 z-10 flex items-center justify-center">
+          <div className={`absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-12 h-12 rounded-full bg-[#141019] border-4 border-amber-400/70 z-10 flex items-center justify-center ${dramatic ? "vip-crown-pop" : ""}`}>
             <Crown size={18} className="text-amber-300" />
           </div>
         </div>
@@ -197,9 +214,14 @@ export const SpinWheel = ({ open, onClose, userName }) => {
           </Button>
         ) : (
           <div data-testid="spin-result" className="text-center space-y-3">
-            <div className={`rounded-2xl border p-4 ${isWin ? "border-amber-500/40 bg-amber-500/10" : "border-white/10 bg-white/5"}`}>
-              <div className="flex justify-center mb-2"><ResultIcon size={30} className={isWin ? "text-amber-300" : "text-slate-300"} /></div>
-              <div className="font-serif-luxe text-xl leading-snug">{welcome()}</div>
+            <div className={`rounded-2xl border p-4 ${bigWin ? "vip-shimmer-card border-amber-400/70 bg-gradient-to-b from-amber-500/20 to-rose-500/10 shadow-[0_0_50px_-8px_rgba(245,158,11,0.7)]" : isWin ? "border-amber-500/40 bg-amber-500/10" : "border-white/10 bg-white/5"}`}>
+              {bigWin && (
+                <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-amber-300 mb-1" data-testid="spin-vip-tag">
+                  ✦ VIP Jackpot ✦
+                </div>
+              )}
+              <div className="flex justify-center mb-2"><ResultIcon size={bigWin ? 38 : 30} className={bigWin ? "text-amber-300 drop-shadow-[0_0_10px_rgba(245,158,11,0.9)]" : isWin ? "text-amber-300" : "text-slate-300"} /></div>
+              <div className={`font-serif-luxe leading-snug ${bigWin ? "text-2xl gold-text" : "text-xl"}`}>{welcome()}</div>
               {result.expires_at && (
                 <div className="text-xs text-emerald-300 mt-2" data-testid="spin-expiry">
                   Expires on {new Date(result.expires_at).toLocaleString()}
